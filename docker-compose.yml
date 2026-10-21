@@ -1,0 +1,12 @@
+services:
+  portfolio-rag-api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./.chroma:/app/.chroma
+      - ./.memory:/app/.memory
+      - ./knowledge:/app/knowledge:ro
+    restart: unless-stopped

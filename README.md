@@ -1,0 +1,174 @@
+# Portfolio Agentic RAG Assistant — Backend
+
+FastAPI + LangGraph + ChromaDB backend for answering visitor questions using approved portfolio knowledge.
+
+## Requirements
+- Python 3.11 to 3.14 (3.15 has no `onnxruntime` wheels yet, and `chromadb` requires it)
+- A Gemini API key (used for both chat and embeddings), or a Gemini key plus an API key for an OpenAI-compatible chat provider (Groq, OpenAI, OpenRouter, ...)
+- No local model runtime: no Ollama, no Sentence Transformers, no torch
+
+## Local setup
+
+```bash
+python -m venv .venv
+# macOS/Linux:
+source .venv/bin/activate
+# Windows PowerShell:
+# .venv\\Scripts\\Activate.ps1
+
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+When you change the Python version, delete the virtualenv first (`rm -rf .venv`).
+Recreating it over an existing one keeps the old packages, and native wheels from the
+previous interpreter fail at import time with errors such as
+`ImportError: cannot import name 'ArgsKwargs' from 'pydantic_core._pydantic_core'`.
+
+Edit `.env` and configure the provider you want to use (see below).
+Keep API keys on the backend only.
+
+## Add portfolio knowledge
+
+Replace the sample files under `knowledge/` with accurate, public, approved content.
+Supported source formats are Markdown (`.md`) and plain text (`.txt`).
+
+Index the knowledge:
+
+```bash
+python -m app.rag.ingest
+```
+
+Run the API:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Open:
+- Health: http://localhost:8000/health
+- Interactive API docs: http://localhost:8000/docs
+
+## Test the chat endpoint
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat \\
+  -H "Content-Type: application/json" \\
+  -d '{"question":"What technologies are listed in the portfolio?"}'
+```
+
+## Conversation memory
+
+The agent keeps a per-session conversation buffer using LangGraph's SQLite
+checkpointer. Every `session_id` maps to one thread, and the turn history
+(question + answer) is stored in a SQLite file:
+
+```env
+CHECKPOINT_DB_PATH=./.memory/checkpoints.sqlite
+MAX_HISTORY_TOKENS=2000
+```
+
+- The history survives restarts (it is on disk, not in process RAM). The
+  `.memory/` directory is mounted as a volume in `docker-compose.yml`, so
+  conversations also survive container recreation.
+- `MAX_HISTORY_TOKENS` caps how much of the recent conversation is replayed
+  into the prompt; older turns are dropped, so the buffer cannot grow without
+  bound.
+- The API stays stateless: pass the same `session_id` back to continue a
+  conversation, or omit it to start a new one.
+- History is used only for intent (pronouns, follow-ups). The system prompt
+  forbids treating earlier assistant answers as evidence — every factual claim
+  must still come from the freshly retrieved evidence.
+
+SQLite is a single-instance store: run one worker, or move to a Postgres
+checkpointer (`langgraph-checkpoint-postgres`) before scaling out.
+
+## Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Liveness check |
+| `POST` | `/api/v1/chat` | Native chat endpoint. Body: `{"question": "...", "session_id": "..."}` |
+| `GET` | `/v1/models` | OpenAI-compatible model list |
+| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completion |
+
+`/api/v1/chat` also accepts an OpenAI-style `messages` array, so both bodies work:
+
+```json
+{"messages": [{"role": "user", "content": "What technologies are listed?"}]}
+```
+
+The `/v1/*` routes let standard chat clients (Open WebUI, LobeChat, custom widgets)
+point at this backend with `base_url = http://localhost:8000/v1` and the model name
+shown by `GET /v1/models`. Streaming (`"stream": true`) is not implemented yet and
+returns a normal JSON completion.
+
+## Gemini (Google AI API)
+
+Get a key from https://aistudio.google.com/apikey and configure:
+
+```env
+LLM_PROVIDER=gemini
+LLM_MODEL=gemini-3.8-flash
+GEMINI_API_KEY=your-gemini-key
+```
+
+`GOOGLE_API_KEY` is accepted as an alias, and `LLM_API_KEY` is used as a fallback
+when `LLM_PROVIDER=gemini`.
+
+Embeddings always use the hosted Gemini embedding model. No local transformer
+model is downloaded or run:
+
+```env
+EMBEDDING_PROVIDER=gemini
+GEMINI_EMBEDDING_MODEL=gemini-embedding-2
+```
+
+`GEMINI_API_KEY` is used for both the chat model and the embedding model.
+
+## OpenAI-compatible providers (Groq, OpenAI, OpenRouter, ...)
+
+Point the base URL at the provider's API root and use one of its model IDs:
+
+```env
+LLM_PROVIDER=openai_compatible
+LLM_API_KEY=your-provider-key
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_MODEL=openai/gpt-oss-120b
+```
+
+Other examples:
+- Groq: `https://api.groq.com/openai/v1` (e.g. `openai/gpt-oss-120b`, `moonshotai/kimi-k2-instruct`)
+- OpenAI: `https://api.openai.com/v1` (e.g. `gpt-4o-mini`)
+- OpenRouter: `https://openrouter.ai/api/v1`
+
+Gemini also exposes an OpenAI-compatible endpoint
+(`https://generativelanguage.googleapis.com/v1beta/openai/`), which works with
+the `openai_compatible` provider if you prefer a single code path.
+
+If you change `GEMINI_EMBEDDING_MODEL`, delete the `.chroma` directory and re-run
+`python -m app.rag.ingest`. Do not mix vectors created by different embedding
+models in one collection.
+
+## Architecture
+
+- `app/rag/ingest.py`: load, chunk and index knowledge files.
+- `app/rag/embeddings.py`: Gemini embedding model.
+- `app/rag/vectorstore.py`: persistent Chroma vector store.
+- `app/agent/graph.py`: LangGraph retrieval/evidence gate/answer workflow.
+- `app/agent/llm.py`: configurable chat-model adapter (Gemini or OpenAI-compatible).
+- `app/agent/memory.py`: SQLite checkpointer for conversation memory.
+- `app/api/routes.py`: native chat endpoint.
+- `app/api/openai_routes.py`: OpenAI-compatible `/v1` endpoints.
+- `knowledge/`: public portfolio facts used by the assistant.
+
+## Important limitations before public deployment
+
+This is a starter MVP, not a fully hardened production service:
+- Conversation history is stored per `session_id` in SQLite, but there is no
+  authentication, expiry, or per-visitor cap on the stored threads.
+- Rate limiting, authentication for admin ingestion, request quotas, and observability must be added before public exposure.
+- Re-ingestion adds stable chunk IDs but does not yet delete obsolete chunks when source files are removed or edited.
+- The current evidence gate uses a simple context-length heuristic, not a semantic relevance classifier.
+- `grounded` means evidence was retrieved; it is not a guarantee that every generated statement is factually correct.
+- Keep proprietary project data and secrets out of `knowledge/`.
