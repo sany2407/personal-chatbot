@@ -13,14 +13,20 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     cors_origins_raw: str = "http://localhost:3000,http://127.0.0.1:3000"
+    # Optional regex for extra origins (handy in dev for any localhost port).
+    cors_origin_regex: str = ""
 
     # Chat model provider: "gemini" (Google AI / Gemini API) or
     # "openai_compatible" (Groq, OpenAI, OpenRouter, Together, ...).
     llm_provider: Literal["gemini", "openai_compatible"] = "gemini"
-    llm_model: str = "gemini-3.8-flash"
+    llm_model: str = "gemini-3.6-flash"
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_temperature: float = 0.2
+    # Bounded retries: the provider SDK retries with exponential backoff, which
+    # otherwise turns a provider outage into a multi-minute hang.
+    llm_max_retries: int = 2
+    llm_timeout: int = 60
 
     # Dedicated Gemini credentials. GEMINI_API_KEY and GOOGLE_API_KEY are both
     # accepted so the same value can be exported under either common name.

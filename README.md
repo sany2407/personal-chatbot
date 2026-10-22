@@ -28,6 +28,19 @@ previous interpreter fail at import time with errors such as
 Edit `.env` and configure the provider you want to use (see below).
 Keep API keys on the backend only.
 
+### CORS
+
+`CORS_ORIGINS_RAW` is an exact allow-list of frontend origins. For local
+development `CORS_ORIGIN_REGEX` can allow a pattern instead (any localhost
+port):
+
+```env
+CORS_ORIGINS_RAW=http://localhost:3000,http://127.0.0.1:3000
+CORS_ORIGIN_REGEX=http://(localhost|127\.0\.0\.1):\d+
+```
+
+In production set only `CORS_ORIGINS_RAW` to your real domain.
+
 ## Add portfolio knowledge
 
 Replace the sample files under `knowledge/` with accurate, public, approved content.
@@ -103,18 +116,29 @@ point at this backend with `base_url = http://localhost:8000/v1` and the model n
 shown by `GET /v1/models`. Streaming (`"stream": true`) is not implemented yet and
 returns a normal JSON completion.
 
+The `my_portfolio` frontend ships a floating `SANY_AI` widget that uses
+`POST /api/v1/chat` and keeps a per-visit `session_id`.
+
 ## Gemini (Google AI API)
 
 Get a key from https://aistudio.google.com/apikey and configure:
 
 ```env
 LLM_PROVIDER=gemini
-LLM_MODEL=gemini-3.8-flash
+LLM_MODEL=gemini-3.6-flash
 GEMINI_API_KEY=your-gemini-key
 ```
 
 `GOOGLE_API_KEY` is accepted as an alias, and `LLM_API_KEY` is used as a fallback
 when `LLM_PROVIDER=gemini`.
+
+Model notes:
+- `gemini-3.6-flash` is the default (stable, good quality/latency balance).
+  `gemini-3.5-flash-lite` is faster and cheaper for high traffic.
+- Gemini 3+ models use fixed sampling defaults and ignore `LLM_TEMPERATURE`.
+- `LLM_MAX_RETRIES` and `LLM_TIMEOUT` bound the provider SDK's retry/backoff
+  behaviour. Without them a provider outage turns into a multi-minute hang
+  instead of a fast error.
 
 Embeddings always use the hosted Gemini embedding model. No local transformer
 model is downloaded or run:

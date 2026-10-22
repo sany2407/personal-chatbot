@@ -4,6 +4,9 @@ from langchain_core.language_models import BaseChatModel
 
 from app.core.config import get_settings
 
+# Gemini 3+ models use fixed sampling defaults and ignore `temperature`.
+FIXED_SAMPLING_PREFIXES = ("gemini-3", "gemini-4")
+
 
 @lru_cache
 def get_chat_model() -> BaseChatModel:
@@ -18,11 +21,15 @@ def get_chat_model() -> BaseChatModel:
                 "A Gemini API key is required for the gemini provider. "
                 "Set GEMINI_API_KEY (or GOOGLE_API_KEY / LLM_API_KEY)."
             )
-        return ChatGoogleGenerativeAI(
-            model=settings.llm_model,
-            google_api_key=api_key,
-            temperature=settings.llm_temperature,
-        )
+        kwargs = {
+            "model": settings.llm_model,
+            "google_api_key": api_key,
+            "max_retries": settings.llm_max_retries,
+            "timeout": settings.llm_timeout,
+        }
+        if not settings.llm_model.startswith(FIXED_SAMPLING_PREFIXES):
+            kwargs["temperature"] = settings.llm_temperature
+        return ChatGoogleGenerativeAI(**kwargs)
 
     from langchain_openai import ChatOpenAI
 
