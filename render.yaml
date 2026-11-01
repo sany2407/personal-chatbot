@@ -22,7 +22,7 @@ services:
     region: singapore
     branch: main
     healthCheckPath: /health
-    autoDeploy: true
+    autoDeployTrigger: commit
     buildCommand: >-
       pip install --upgrade pip &&
       pip install -r requirements.txt &&
