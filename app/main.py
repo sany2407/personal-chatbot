@@ -21,7 +21,11 @@ async def lifespan(app: FastAPI):
     # eagerly: hosted platforms hand us a fresh filesystem on every boot.
     settings = get_settings()
     if settings.ensure_index_on_startup:
-        app.state.index = await asyncio.to_thread(ensure_index)
+        try:
+            app.state.index = await asyncio.to_thread(ensure_index)
+        except Exception as exc:  # never block boot on the index
+            print(f"[index] startup check failed: {exc}", flush=True)
+            app.state.index = {"status": "error", "chunks": 0, "error": str(exc)}
     else:
         app.state.index = index_status()
     yield

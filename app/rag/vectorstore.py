@@ -10,63 +10,93 @@ from langchain_chroma import Chroma
 from app.core.config import get_settings
 from app.rag.embeddings import get_embeddings
 
+# Set when the configured directory turned out to be unusable at runtime.
+_override: Path | None = None
+
 
 def _writable(path: Path) -> bool:
-    """True when this process can write the store's SQLite file."""
+    """Probe the exact directory and SQLite file Chroma will write.
+
+    ``os.access`` only inspects permission bits, which is not enough on
+    container filesystems: a build artifact can look writable by mode while the
+    mount refuses writes. Actually attempting a write is the only reliable test.
+    """
     try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write-probe"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
         database = path / "chroma.sqlite3"
         if database.exists():
-            return os.access(database, os.W_OK)
-        return os.access(path, os.W_OK)
+            with open(database, "ab"):
+                pass
+        return True
     except OSError:
         return False
 
 
+def _seed_copy(source: Path, target: Path) -> None:
+    """Copy a prebuilt index, clearing any inherited read-only bits."""
+    if not source.exists():
+        return
+    try:
+        shutil.copytree(source, target, dirs_exist_ok=True)
+    except OSError as exc:
+        print(f"[chroma] could not copy index to {target}: {exc}", flush=True)
+        return
+    for item in [target, *target.rglob("*")]:
+        try:
+            os.chmod(item, item.stat().st_mode | stat.S_IWUSR)
+        except OSError:
+            pass
+    print(f"[chroma] copied index to {target}", flush=True)
+
+
+def temp_store_dir() -> Path:
+    """Writable location used when the configured store cannot be written."""
+    return Path(tempfile.gettempdir()) / "portfolio-chroma"
+
+
+def switch_to_temp_store() -> Path:
+    """Move the store to a writable temp directory.
+
+    Called after Chroma reports a readonly database: the configured directory
+    exists and is readable, but this process cannot write it (typical when a
+    build step and the runtime use different users or a read-only image layer).
+    The prebuilt index is copied across so no re-embedding is needed.
+    """
+    global _override
+
+    if _override is not None:
+        return _override
+
+    configured = Path(get_settings().chroma_persist_dir)
+    fallback = temp_store_dir()
+    if configured.resolve() != fallback.resolve():
+        if not (fallback / "chroma.sqlite3").exists():
+            _seed_copy(configured, fallback)
+
+    fallback.mkdir(parents=True, exist_ok=True)
+    _override = fallback
+    persist_dir.cache_clear()
+    get_vectorstore.cache_clear()
+    print(f"[chroma] using writable store at {fallback}", flush=True)
+    return fallback
+
+
 @lru_cache
 def persist_dir() -> Path:
-    """Return a Chroma directory this process is allowed to write.
+    """Return a Chroma directory this process can actually write."""
+    if _override is not None:
+        return _override
 
-    Hosted builds frequently leave the prebuilt index owned by the build user,
-    while the app runs as someone else. Chroma then fails with
-    ``attempt to write a readonly database`` even though the files are readable,
-    so the index looks empty at boot.
-
-    In that case the prebuilt index is copied to a writable temp directory and
-    used from there. Local development keeps using the configured path.
-    """
-    settings = get_settings()
-    configured = Path(settings.chroma_persist_dir)
-
-    try:
-        configured.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-
+    configured = Path(get_settings().chroma_persist_dir)
     if _writable(configured):
         return configured
 
-    fallback = Path(tempfile.gettempdir()) / "portfolio-chroma"
-    seeded = fallback / "chroma.sqlite3"
-    if not seeded.exists() and configured.exists():
-        try:
-            shutil.copytree(configured, fallback, dirs_exist_ok=True)
-            # Copies can inherit read-only bits (notably on Windows); a copied
-            # index is useless to Chroma unless this process can write it.
-            for item in [fallback, *fallback.rglob("*")]:
-                try:
-                    os.chmod(item, item.stat().st_mode | stat.S_IWUSR)
-                except OSError:
-                    pass
-            print(f"[chroma] copied read-only index to {fallback}", flush=True)
-        except OSError as exc:
-            print(f"[chroma] could not copy index to {fallback}: {exc}", flush=True)
-
-    try:
-        fallback.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise RuntimeError(
-            f"No writable Chroma directory: {configured} and {fallback} both failed ({exc})"
-        ) from exc
+    fallback = temp_store_dir()
+    _seed_copy(configured, fallback)
+    fallback.mkdir(parents=True, exist_ok=True)
     return fallback
 
 
@@ -86,8 +116,9 @@ def store_paths() -> dict:
     resolved = persist_dir()
     return {
         "configured": str(configured),
-        "resolved": str(resolved),
         "configured_writable": _writable(configured),
+        "resolved": str(resolved),
         "resolved_writable": _writable(resolved),
+        "temp": str(temp_store_dir()),
         "uid": getattr(os, "getuid", lambda: None)(),
     }

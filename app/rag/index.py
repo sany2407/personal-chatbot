@@ -15,12 +15,19 @@ import shutil
 from pathlib import Path
 
 from app.core.config import get_settings
-from app.rag.vectorstore import get_vectorstore, persist_dir
+from app.rag.vectorstore import get_vectorstore, persist_dir, switch_to_temp_store
 
 META_FILENAME = "index-meta.json"
 
 # Set by ensure_index() so /health can report the state without touching disk.
 _last_status: dict = {}
+
+READONLY_MARKERS = ("readonly database", "read-only", "read only")
+
+
+def _is_readonly_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in READONLY_MARKERS)
 
 
 def _meta_path() -> Path:
@@ -31,7 +38,7 @@ def read_index_meta() -> dict:
     """Return the metadata written by the last successful ingestion."""
     try:
         return json.loads(_meta_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):
         return {}
 
 
@@ -55,7 +62,15 @@ def indexed_chunks() -> int:
     """Return how many chunks are currently stored, or 0 when unavailable."""
     try:
         return int(get_vectorstore()._collection.count())
-    except Exception:
+    except Exception as exc:
+        if _is_readonly_error(exc):
+            # The store is readable but this process cannot write it: move to a
+            # writable copy and try again before declaring the index empty.
+            try:
+                switch_to_temp_store()
+                return int(get_vectorstore()._collection.count())
+            except Exception as retry_exc:
+                print(f"[index] writable store retry failed: {retry_exc}", flush=True)
         # A missing or unreadable store is treated as "needs indexing".
         return 0
 
