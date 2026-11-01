@@ -1,0 +1,62 @@
+# Render blueprint: one native Python web service.
+#
+# Deploy with: Render Dashboard -> New -> Blueprint -> pick this repository.
+# Render reads this file and creates the service. You only supply the Gemini
+# API key, which is marked `sync: false` so it is asked for at creation time.
+#
+# Notes:
+# - The vector index is built during the build step, so it ships inside the
+#   deploy image and cold starts stay fast. `app/rag/index.py` rebuilds it at
+#   boot if it is ever missing or built with another embedding model.
+# - Render's filesystem is ephemeral: conversation history (SQLite) resets when
+#   the service restarts or spins down after inactivity. Retrieval is unaffected
+#   because the index is part of the image.
+# - The Free plan sleeps after 15 minutes without traffic. The first request
+#   afterwards waits for the instance to wake up.
+
+services:
+  - type: web
+    name: portfolio-rag-assistant
+    runtime: python
+    plan: free
+    region: singapore
+    branch: main
+    healthCheckPath: /health
+    autoDeploy: true
+    buildCommand: >-
+      pip install --upgrade pip &&
+      pip install -r requirements.txt &&
+      python -m app.rag.ingest
+    # Render injects $PORT; the app must listen on it.
+    startCommand: >-
+      uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: APP_ENV
+        value: production
+
+      # Chat + embeddings. Gemini is the only supported embedding provider.
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: LLM_MODEL
+        value: gemini-3.6-flash
+      - key: GEMINI_EMBEDDING_MODEL
+        value: gemini-embedding-2
+      - key: LLM_MAX_RETRIES
+        value: "2"
+      - key: LLM_TIMEOUT
+        value: "60"
+      - key: GEMINI_API_KEY
+        sync: false
+
+      # CORS: exact origins plus a regex that also covers Vercel preview URLs
+      # and local development. Replace the first entry with your real domain.
+      - key: CORS_ORIGINS_RAW
+        value: https://sany-portfolio.vercel.app,http://localhost:3000,http://127.0.0.1:3000
+      - key: CORS_ORIGIN_REGEX
+        value: ^https://([a-z0-9-]+\.)*vercel\.app$|^http://(localhost|127\.0\.0\.1):\d+$
+
+      # Public endpoint: cap cost per client. 0 disables the limiter.
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "30"

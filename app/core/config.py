@@ -52,6 +52,18 @@ class Settings(BaseSettings):
     checkpoint_db_path: str = "./.memory/checkpoints.sqlite"
     max_history_tokens: int = 2000
 
+    # Hosted platforms boot from a fresh filesystem. When enabled, the vector
+    # index is rebuilt automatically if it is missing, empty, or stale.
+    ensure_index_on_startup: bool = True
+
+    # Public deployments pay for every chat call, so the chat routes are rate
+    # limited per client IP. Set to 0 to disable.
+    rate_limit_per_minute: int = 30
+    rate_limit_window_seconds: int = 60
+    # Render/Fly/Railway proxies set X-Forwarded-For; direct clients cannot
+    # forge it while the app is only reachable through the proxy.
+    trust_proxy_headers: bool = True
+
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins_raw.split(",") if origin.strip()]

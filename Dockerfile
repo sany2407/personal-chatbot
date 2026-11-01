@@ -19,4 +19,5 @@ RUN useradd --create-home appuser && \
 USER appuser
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Works locally (PORT unset -> 8000) and on hosts that inject $PORT (Render).
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]

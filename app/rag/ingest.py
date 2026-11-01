@@ -67,4 +67,9 @@ def ingest() -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Index portfolio knowledge into ChromaDB.")
     parser.parse_args()
-    ingest()
+    chunks = ingest()
+
+    # Record the embedding model so a mismatch is detected on the next boot.
+    from app.rag.index import write_index_meta
+
+    write_index_meta(chunks)

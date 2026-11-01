@@ -174,14 +174,85 @@ If you change `GEMINI_EMBEDDING_MODEL`, delete the `.chroma` directory and re-ru
 `python -m app.rag.ingest`. Do not mix vectors created by different embedding
 models in one collection.
 
+## Deploy to Render
+
+`render.yaml` describes the whole service, so the fastest path is a Blueprint:
+
+1. Push this repository to GitHub (already at `sany2407/personal-chatbot`).
+2. In the Render Dashboard: **New → Blueprint**, connect the repository, and
+   apply. Render reads `render.yaml` and creates one Python web service.
+3. When prompted, paste your **`GEMINI_API_KEY`** (it is marked `sync: false`,
+   so it is never stored in git).
+4. Wait for the first deploy, then open
+   `https://<service-name>.onrender.com/health`.
+
+The build runs `python -m app.rag.ingest`, so the Chroma index ships inside the
+deploy image and cold starts do not pay for embedding 31 chunks again. If the
+index is ever missing, empty, or built with a different embedding model,
+`app/rag/index.py` rebuilds it at startup (`ENSURE_INDEX_ON_STARTUP=true`).
+
+`/health` reports the index state:
+
+```json
+{
+  "status": "ok",
+  "index": {"status": "ready", "chunks": 31, "embedding_model": "gemini-embedding-2"},
+  "index_ready": true,
+  "environment": "production"
+}
+```
+
+### Point the frontend at it
+
+Set the deployed URL in the portfolio project and redeploy the frontend:
+
+```env
+NEXT_PUBLIC_CHAT_API_URL=https://<service-name>.onrender.com
+```
+
+Also add the frontend origin to `CORS_ORIGINS_RAW` (or cover it with
+`CORS_ORIGIN_REGEX`) and redeploy the backend. The blueprint ships a regex that
+already allows `https://*.vercel.app` and any localhost port.
+
+### Free plan caveats
+
+- The service sleeps after 15 minutes without traffic; the first request after
+  that can take 30–60s while the instance wakes up. The frontend client waits
+  up to 90s, so the widget shows a normal answer (or its predefined fallback if
+  the wake-up takes longer).
+- The filesystem is ephemeral. The vector index is unaffected (it is part of
+  the image), but SQLite conversation history resets on every restart or
+  spin-down. Visitors simply lose earlier context; nothing breaks.
+- Bump to a paid instance and attach a Render disk mounted at `/app/.memory` if
+  conversations must survive restarts.
+
+### Manual equivalent
+
+**New → Web Service → Python**, then:
+
+```text
+Build:  pip install -r requirements.txt && python -m app.rag.ingest
+Start:  uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+Health: /health
+```
+
+Set `PYTHON_VERSION=3.12.7`, `LLM_PROVIDER=gemini`,
+`LLM_MODEL=gemini-3.6-flash`, `GEMINI_EMBEDDING_MODEL=gemini-embedding-2`,
+`GEMINI_API_KEY`, `CORS_ORIGINS_RAW`, and optionally `RATE_LIMIT_PER_MINUTE`.
+
+Keep `--workers 1`: the SQLite checkpointer and the in-process rate limiter are
+single-instance stores.
+
 ## Architecture
 
 - `app/rag/ingest.py`: load, chunk and index knowledge files.
+- `app/rag/index.py`: startup index check/rebuild for ephemeral filesystems.
 - `app/rag/embeddings.py`: Gemini embedding model.
 - `app/rag/vectorstore.py`: persistent Chroma vector store.
 - `app/agent/graph.py`: LangGraph retrieval/evidence gate/answer workflow.
 - `app/agent/llm.py`: configurable chat-model adapter (Gemini or OpenAI-compatible).
 - `app/agent/memory.py`: SQLite checkpointer for conversation memory.
+- `app/core/ratelimit.py`: per-client-IP limit for the paid chat routes.
 - `app/api/routes.py`: native chat endpoint.
 - `app/api/openai_routes.py`: OpenAI-compatible `/v1` endpoints.
 - `knowledge/`: public portfolio facts used by the assistant.
@@ -191,7 +262,9 @@ models in one collection.
 This is a starter MVP, not a fully hardened production service:
 - Conversation history is stored per `session_id` in SQLite, but there is no
   authentication, expiry, or per-visitor cap on the stored threads.
-- Rate limiting, authentication for admin ingestion, request quotas, and observability must be added before public exposure.
+- Chat routes have a per-IP rate limit (`RATE_LIMIT_PER_MINUTE`, default 30/min)
+  but there is no authentication, per-user quota, or shared (Redis) counter, so
+  the limit is per instance and only a speed bump against scripted abuse.
 - Re-ingestion adds stable chunk IDs but does not yet delete obsolete chunks when source files are removed or edited.
 - The current evidence gate uses a simple context-length heuristic, not a semantic relevance classifier.
 - `grounded` means evidence was retrieved; it is not a guarantee that every generated statement is factually correct.
