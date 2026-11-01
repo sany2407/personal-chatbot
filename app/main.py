@@ -123,6 +123,11 @@ def health():
         },
         # Short trail of index decisions, useful when a deploy misbehaves.
         "notes": index_notes(),
+        # Effective CORS policy, so a blocked browser origin is diagnosable.
+        "cors": {
+            "origins": settings.cors_origins,
+            "origin_regex": settings.cors_origin_regex or None,
+        },
     }
     if index.get("error"):
         # Surfaced so a broken deployment is diagnosable from the outside.
