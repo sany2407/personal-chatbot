@@ -15,7 +15,7 @@ import shutil
 from pathlib import Path
 
 from app.core.config import get_settings
-from app.rag.vectorstore import get_vectorstore
+from app.rag.vectorstore import get_vectorstore, persist_dir
 
 META_FILENAME = "index-meta.json"
 
@@ -24,8 +24,7 @@ _last_status: dict = {}
 
 
 def _meta_path() -> Path:
-    settings = get_settings()
-    return Path(settings.chroma_persist_dir) / META_FILENAME
+    return persist_dir() / META_FILENAME
 
 
 def read_index_meta() -> dict:
@@ -63,11 +62,10 @@ def indexed_chunks() -> int:
 
 def rebuild_index() -> int:
     """Drop the persisted store and index the knowledge directory again."""
-    settings = get_settings()
     # Release the cached Chroma handle before removing its files, otherwise the
     # open SQLite connection keeps the directory locked on Windows.
     get_vectorstore.cache_clear()
-    shutil.rmtree(settings.chroma_persist_dir, ignore_errors=True)
+    shutil.rmtree(persist_dir(), ignore_errors=True)
 
     # Imported here so `python -m app.rag.ingest` can import this module
     # without a circular dependency at import time.
