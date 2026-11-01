@@ -77,3 +77,17 @@ def get_vectorstore() -> Chroma:
         persist_directory=str(persist_dir()),
         embedding_function=get_embeddings(),
     )
+
+
+def store_paths() -> dict:
+    """Where the store resolved to, for /health diagnostics."""
+    settings = get_settings()
+    configured = Path(settings.chroma_persist_dir)
+    resolved = persist_dir()
+    return {
+        "configured": str(configured),
+        "resolved": str(resolved),
+        "configured_writable": _writable(configured),
+        "resolved_writable": _writable(resolved),
+        "uid": getattr(os, "getuid", lambda: None)(),
+    }

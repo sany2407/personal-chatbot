@@ -1,5 +1,6 @@
 import asyncio
 import os
+import platform
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -11,6 +12,7 @@ from app.api.routes import router
 from app.core.config import get_settings
 from app.core.ratelimit import SlidingWindowLimiter
 from app.rag.index import ensure_index, index_status
+from app.rag.vectorstore import store_paths
 
 
 @asynccontextmanager
@@ -86,6 +88,7 @@ app.include_router(openai_router, prefix="/v1")
 @app.get("/health", tags=["health"])
 def health():
     index = index_status()
+    paths = store_paths()
     payload = {
         "status": "ok",
         "service": "portfolio-rag-assistant",
@@ -93,10 +96,17 @@ def health():
             "status": index.get("status", "unknown"),
             "chunks": index.get("chunks", 0),
             "embedding_model": index.get("embedding_model"),
+            "dir": paths["resolved"],
+            "dir_writable": paths["resolved_writable"],
         },
         # Reported for monitoring: the API is up even if ingestion failed.
         "index_ready": index.get("status") == "ready" and index.get("chunks", 0) > 0,
         "environment": os.getenv("APP_ENV", settings.app_env),
+        "build": {
+            "commit": (os.getenv("RENDER_GIT_COMMIT") or "local")[:7],
+            "python": platform.python_version(),
+            "uid": paths["uid"],
+        },
     }
     if index.get("error"):
         # Surfaced so a broken deployment is diagnosable from the outside.
