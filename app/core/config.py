@@ -13,8 +13,13 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     cors_origins_raw: str = "http://localhost:3000,http://127.0.0.1:3000"
-    # Optional regex for extra origins (handy in dev for any localhost port).
-    cors_origin_regex: str = ""
+    # Optional regex for extra origins. The default allows any local dev port
+    # and Vercel deployments (production plus preview URLs), which covers the
+    # portfolio frontend without per-deploy configuration. Set it to "" to
+    # allow only CORS_ORIGINS_RAW.
+    cors_origin_regex: str = (
+        r"^https://([a-z0-9-]+\.)*vercel\.app$|^http://(localhost|127\.0\.0\.1):\d+$"
+    )
 
     # Chat model provider: "gemini" (Google AI / Gemini API) or
     # "openai_compatible" (Groq, OpenAI, OpenRouter, Together, ...).
