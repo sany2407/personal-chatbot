@@ -110,25 +110,28 @@ def test_readonly_store_is_switched_to_a_writable_copy(monkeypatch):
     monkeypatch.setattr(
         index_module,
         "switch_to_temp_store",
-        lambda: switched.append(True) or Path("/tmp/fake-store"),
+        lambda reason="": switched.append(reason) or Path("/tmp/fake-store"),
     )
 
     assert index_module.indexed_chunks() == 31
-    assert switched == [True]
+    assert switched == ["RuntimeError"]
 
 
-def test_other_errors_are_not_treated_as_readonly(monkeypatch):
+def test_any_count_failure_tries_the_writable_store_once(monkeypatch):
     class Broken:
         def count(self):
-            raise RuntimeError("collection is empty")
+            raise RuntimeError("database disk image is malformed")
 
     switched = []
     monkeypatch.setattr(
         index_module, "get_vectorstore", lambda: SimpleNamespace(_collection=Broken())
     )
-    monkeypatch.setattr(
-        index_module, "switch_to_temp_store", lambda: switched.append(True)
-    )
+
+    def switch(reason=""):
+        switched.append(reason)
+        raise RuntimeError("cannot copy")
+
+    monkeypatch.setattr(index_module, "switch_to_temp_store", switch)
 
     assert index_module.indexed_chunks() == 0
-    assert switched == []
+    assert len(switched) == 1

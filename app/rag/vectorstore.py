@@ -57,13 +57,13 @@ def temp_store_dir() -> Path:
     return Path(tempfile.gettempdir()) / "portfolio-chroma"
 
 
-def switch_to_temp_store() -> Path:
+def switch_to_temp_store(reason: str = "") -> Path:
     """Move the store to a writable temp directory.
 
-    Called after Chroma reports a readonly database: the configured directory
-    exists and is readable, but this process cannot write it (typical when a
-    build step and the runtime use different users or a read-only image layer).
-    The prebuilt index is copied across so no re-embedding is needed.
+    Called when Chroma cannot use the configured directory: it can be readable
+    yet still fail to write (build artifacts come from another image layer, so
+    SQLite reports the database as moved or read-only). The prebuilt index is
+    copied across so no re-embedding is needed.
     """
     global _override
 
@@ -78,10 +78,14 @@ def switch_to_temp_store() -> Path:
 
     fallback.mkdir(parents=True, exist_ok=True)
     _override = fallback
+    reset_client()
     persist_dir.cache_clear()
-    get_vectorstore.cache_clear()
-    print(f"[chroma] using writable store at {fallback}", flush=True)
+    print(f"[chroma] using writable store at {fallback} ({reason})", flush=True)
     return fallback
+
+
+def using_override() -> bool:
+    return _override is not None
 
 
 @lru_cache
@@ -107,6 +111,23 @@ def get_vectorstore() -> Chroma:
         persist_directory=str(persist_dir()),
         embedding_function=get_embeddings(),
     )
+
+
+def reset_client() -> None:
+    """Drop the cached client and chromadb's process-wide system cache.
+
+    After a failed start chromadb keeps a half-initialised system in its
+    singleton cache; reusing it raises ``'RustBindingsAPI' object has no
+    attribute 'bindings'``. Clearing the cache lets the next attempt start
+    cleanly.
+    """
+    get_vectorstore.cache_clear()
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+
+        SharedSystemClient.clear_system_cache()
+    except Exception:
+        pass
 
 
 def store_paths() -> dict:

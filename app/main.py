@@ -11,8 +11,17 @@ from app.api.openai_routes import router as openai_router
 from app.api.routes import router
 from app.core.config import get_settings
 from app.core.ratelimit import SlidingWindowLimiter
-from app.rag.index import ensure_index, index_status
+from app.rag.index import ensure_index, index_notes, index_status
 from app.rag.vectorstore import store_paths
+
+
+def _package_version(name: str) -> str:
+    try:
+        from importlib.metadata import version
+
+        return version(name)
+    except Exception:
+        return "unknown"
 
 
 @asynccontextmanager
@@ -109,8 +118,11 @@ def health():
         "build": {
             "commit": (os.getenv("RENDER_GIT_COMMIT") or "local")[:7],
             "python": platform.python_version(),
+            "chromadb": _package_version("chromadb"),
             "uid": paths["uid"],
         },
+        # Short trail of index decisions, useful when a deploy misbehaves.
+        "notes": index_notes(),
     }
     if index.get("error"):
         # Surfaced so a broken deployment is diagnosable from the outside.

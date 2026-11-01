@@ -15,14 +15,32 @@ import shutil
 from pathlib import Path
 
 from app.core.config import get_settings
-from app.rag.vectorstore import get_vectorstore, persist_dir, switch_to_temp_store
+from app.rag.vectorstore import (
+    get_vectorstore,
+    persist_dir,
+    reset_client,
+    switch_to_temp_store,
+    using_override,
+)
 
 META_FILENAME = "index-meta.json"
 
 # Set by ensure_index() so /health can report the state without touching disk.
 _last_status: dict = {}
+_notes: list[str] = []
 
 READONLY_MARKERS = ("readonly database", "read-only", "read only")
+
+
+def _note(message: str) -> None:
+    """Keep a short trail of index decisions for /health."""
+    _notes.append(message[:300])
+    del _notes[:-5]
+    print(f"[index] {message}", flush=True)
+
+
+def index_notes() -> list[str]:
+    return list(_notes)
 
 
 def _is_readonly_error(exc: Exception) -> bool:
@@ -63,23 +81,26 @@ def indexed_chunks() -> int:
     try:
         return int(get_vectorstore()._collection.count())
     except Exception as exc:
-        if _is_readonly_error(exc):
-            # The store is readable but this process cannot write it: move to a
-            # writable copy and try again before declaring the index empty.
-            try:
-                switch_to_temp_store()
-                return int(get_vectorstore()._collection.count())
-            except Exception as retry_exc:
-                print(f"[index] writable store retry failed: {retry_exc}", flush=True)
-        # A missing or unreadable store is treated as "needs indexing".
-        return 0
+        if using_override():
+            _note(f"count failed on the writable store: {type(exc).__name__}: {exc}")
+            return 0
+        # The configured directory is unusable for writes: move to a writable
+        # copy of the prebuilt index and retry before declaring it empty.
+        _note(f"count failed ({'readonly' if _is_readonly_error(exc) else 'error'}): {type(exc).__name__}: {exc}")
+        try:
+            switch_to_temp_store(reason=type(exc).__name__)
+            _note(f"switched to {persist_dir()}")
+            return int(get_vectorstore()._collection.count())
+        except Exception as retry_exc:
+            _note(f"writable store retry failed: {type(retry_exc).__name__}: {retry_exc}")
+            return 0
 
 
 def rebuild_index() -> int:
     """Drop the persisted store and index the knowledge directory again."""
     # Release the cached Chroma handle before removing its files, otherwise the
     # open SQLite connection keeps the directory locked on Windows.
-    get_vectorstore.cache_clear()
+    reset_client()
     shutil.rmtree(persist_dir(), ignore_errors=True)
 
     # Imported here so `python -m app.rag.ingest` can import this module
@@ -138,11 +159,11 @@ def ensure_index(force: bool = False) -> dict:
             "embedding_model": model,
             "error": _safe_error(exc),
         }
-        print(f"[index] build failed: {exc}", flush=True)
+        _note(f"build failed: {type(exc).__name__}: {exc}")
         return _last_status
 
     _last_status = {"status": "ready", "chunks": chunks, "embedding_model": model}
-    print(f"[index] ready with {chunks} chunks", flush=True)
+    _note(f"ready with {chunks} chunks in {persist_dir()}")
     return _last_status
 
 
