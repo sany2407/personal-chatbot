@@ -78,6 +78,15 @@ def rebuild_index() -> int:
     return chunks
 
 
+def _safe_error(exc: Exception) -> str:
+    """One-line error text for /health, with anything key-like redacted."""
+    import re
+
+    message = f"{type(exc).__name__}: {exc}".replace("\n", " ")
+    message = re.sub(r"(key=)[^\s&,)\]]+", r"\1***", message, flags=re.IGNORECASE)
+    return message[:300]
+
+
 def ensure_index(force: bool = False) -> dict:
     """Make sure the vector store matches the configured knowledge.
 
@@ -110,7 +119,12 @@ def ensure_index(force: bool = False) -> dict:
     try:
         chunks = rebuild_index()
     except Exception as exc:  # keep the API up; /health reports the failure
-        _last_status = {"status": "error", "chunks": 0, "error": str(exc)}
+        _last_status = {
+            "status": "error",
+            "chunks": 0,
+            "embedding_model": model,
+            "error": _safe_error(exc),
+        }
         print(f"[index] build failed: {exc}", flush=True)
         return _last_status
 

@@ -86,7 +86,7 @@ app.include_router(openai_router, prefix="/v1")
 @app.get("/health", tags=["health"])
 def health():
     index = index_status()
-    return {
+    payload = {
         "status": "ok",
         "service": "portfolio-rag-assistant",
         "index": {
@@ -98,3 +98,7 @@ def health():
         "index_ready": index.get("status") == "ready" and index.get("chunks", 0) > 0,
         "environment": os.getenv("APP_ENV", settings.app_env),
     }
+    if index.get("error"):
+        # Surfaced so a broken deployment is diagnosable from the outside.
+        payload["index"]["error"] = index["error"]
+    return payload
