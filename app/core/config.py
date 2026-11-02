@@ -3,6 +3,12 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Vercel gives every deployment its own origin, so preview and production URLs
+# cannot be listed in advance. This pattern covers them plus any local dev port.
+PREVIEW_ORIGIN_REGEX = (
+    r"^https://([a-z0-9-]+\.)*vercel\.app$|^http://(localhost|127\.0\.0\.1):\d+$"
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -13,13 +19,11 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     cors_origins_raw: str = "http://localhost:3000,http://127.0.0.1:3000"
-    # Optional regex for extra origins. The default allows any local dev port
-    # and Vercel deployments (production plus preview URLs), which covers the
-    # portfolio frontend without per-deploy configuration. Set it to "" to
-    # allow only CORS_ORIGINS_RAW.
-    cors_origin_regex: str = (
-        r"^https://([a-z0-9-]+\.)*vercel\.app$|^http://(localhost|127\.0\.0\.1):\d+$"
-    )
+    # Extra origin patterns on top of the defaults below (e.g. a custom domain).
+    cors_origin_regex: str = ""
+    # Allows *.vercel.app deployments and any localhost port. Disable to serve
+    # only the origins listed in CORS_ORIGINS_RAW / CORS_ORIGIN_REGEX.
+    cors_allow_previews: bool = True
 
     # Chat model provider: "gemini" (Google AI / Gemini API) or
     # "openai_compatible" (Groq, OpenAI, OpenRouter, Together, ...).
@@ -72,6 +76,24 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins_raw.split(",") if origin.strip()]
+
+    @property
+    def effective_cors_origin_regex(self) -> str | None:
+        """Combine the configured patterns with the deployment defaults.
+
+        A deployment URL changes on every Vercel preview, so the built-in
+        pattern is always applied unless ``CORS_ALLOW_PREVIEWS=false``. An
+        explicit ``CORS_ORIGIN_REGEX`` adds to it rather than replacing it,
+        which keeps a stale value in a hosting dashboard from silently blocking
+        the frontend.
+        """
+        patterns = [PREVIEW_ORIGIN_REGEX] if self.cors_allow_previews else []
+        custom = self.cors_origin_regex.strip()
+        if custom and custom not in patterns:
+            patterns.append(custom)
+        if not patterns:
+            return None
+        return "|".join(f"(?:{pattern})" for pattern in patterns)
 
     def resolve_gemini_api_key(self) -> str:
         """Return the Gemini API key from the most explicit source available."""

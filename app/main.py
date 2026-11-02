@@ -51,7 +51,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_origin_regex=settings.cors_origin_regex or None,
+    allow_origin_regex=settings.effective_cors_origin_regex,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "Authorization"],
@@ -126,7 +126,8 @@ def health():
         # Effective CORS policy, so a blocked browser origin is diagnosable.
         "cors": {
             "origins": settings.cors_origins,
-            "origin_regex": settings.cors_origin_regex or None,
+            "origin_regex": settings.effective_cors_origin_regex,
+            "allow_previews": settings.cors_allow_previews,
         },
     }
     if index.get("error"):

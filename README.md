@@ -30,16 +30,24 @@ Keep API keys on the backend only.
 
 ### CORS
 
-`CORS_ORIGINS_RAW` is an exact allow-list of frontend origins. For local
-development `CORS_ORIGIN_REGEX` can allow a pattern instead (any localhost
-port):
+Three settings build the allow-list:
 
 ```env
 CORS_ORIGINS_RAW=http://localhost:3000,http://127.0.0.1:3000
-CORS_ORIGIN_REGEX=http://(localhost|127\.0\.0\.1):\d+
+CORS_ORIGIN_REGEX=                 # extra patterns, e.g. ^https://sany\.dev$
+CORS_ALLOW_PREVIEWS=true           # *.vercel.app + any localhost port
 ```
 
-In production set only `CORS_ORIGINS_RAW` to your real domain.
+- `CORS_ORIGINS_RAW` is an exact allow-list.
+- `CORS_ALLOW_PREVIEWS` (default on) always allows `https://*.vercel.app` and
+  any localhost/127.0.0.1 port, so production and preview deployments work
+  without per-deploy configuration.
+- `CORS_ORIGIN_REGEX` **adds** patterns; it never removes the defaults. A stale
+  value in a hosting dashboard therefore cannot lock the frontend out. Set
+  `CORS_ALLOW_PREVIEWS=false` to serve only the exact origins and patterns.
+
+`/health` reports the effective policy, including the combined regex, so a
+blocked browser origin is diagnosable without reading logs.
 
 ## Add portfolio knowledge
 
